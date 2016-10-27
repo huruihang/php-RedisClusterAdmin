@@ -26,7 +26,7 @@ if (isset($_GET['o'])) {
             $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : '';
             $pattern = $prefix ? "{$prefix}{$DS}*" : "*";
             $keyList = $redisCluster->keys($pattern);
-            sort($keyList);
+            natsort($keyList);
             $data = [];
             $lastVal = '';
             foreach ($keyList as $k => $v) {
@@ -83,8 +83,11 @@ if (isset($_GET['o'])) {
             if ($type) {
                 $size = strlen(serialize($data)) . ' b';
             }
-            if (is_array($data)) {
+            if (is_array($data) || is_object($data)) {
                 $data = print_r($data, 1);
+            } else {
+                $data = htmlspecialchars($data);
+                $data = wordwrap($data, 300, "\n", true);
             }
 
             $HTML .= '<table width="100%" cellspacing="0" cellpadding="0" border="0">';
