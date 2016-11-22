@@ -180,7 +180,7 @@ $sysInfo .= '</tr></table>';
 
 $optStr = '';
 foreach ($config as $k => $v) {
-    $optStr .= "<option>{$k}</option>";
+    $optStr .= "<option " . ($module == $k ? "selected" : "") . ">{$k}</option>";
 }
 
 $HTML .= '<!DOCTYPE html>
@@ -244,8 +244,11 @@ $HTML .= '<!DOCTYPE html>
     };
     jQuery(function($) {
         zTreeObj = $.fn.zTree.init($("#tree"), setting);
-        $("#module").change( function(e) {
+        $("#module").change(function(e) {
             $.cookie("module", $(this).val());
+			$(this).delay(200).queue(function(){
+				location.reload();
+			});
         });
     });
 </script>
