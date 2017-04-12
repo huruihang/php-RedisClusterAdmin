@@ -1,10 +1,27 @@
 <?php
 
+ini_set('memory_limit', '1G');
+
 $config = [
-    'default' => [
-        'localhost:7001',
-        'localhost:7002',
-        'localhost:7003',
+#    'Aniu' => [
+#        '172.17.10.79:7001',
+#        '172.17.10.79:7002',
+#        '172.17.10.79:7003',
+#    ],
+    '网站开发' => [
+        '10.16.6.89:8001',
+        '10.16.6.89:8002',
+        '10.16.6.89:8003',
+    ],
+    '网站测试' => [
+        '10.16.6.90:8001',
+        '10.16.6.90:8002',
+        '10.16.6.90:8003',
+    ],
+    '平台测试' => [
+        '10.16.6.16:7000',
+        '10.16.6.16:7001',
+        '10.16.6.16:7002',
     ],
 ];
 $module = isset($_COOKIE['module']) ? $_COOKIE['module'] : array_keys($config)[0];
@@ -12,9 +29,9 @@ $module = isset($_COOKIE['module']) ? $_COOKIE['module'] : array_keys($config)[0
 $DS = '_';
 $HTML = '';
 
-$redisCluster = new RedisCluster(null, $config[$module], 0.1, 1);
-$redisCluster->setOption(RedisCluster::OPT_SERIALIZER, RedisCluster::SERIALIZER_PHP);
-$redisCluster->setOption(RedisCluster::OPT_SLAVE_FAILOVER, RedisCluster::FAILOVER_DISTRIBUTE_SLAVES);
+$redisCluster = new \RedisCluster(null, $config[$module], 1, 1, false);
+$redisCluster->setOption(\RedisCluster::OPT_SERIALIZER, \RedisCluster::SERIALIZER_PHP);
+$redisCluster->setOption(\RedisCluster::OPT_SLAVE_FAILOVER, \RedisCluster::FAILOVER_ERROR);
 register_shutdown_function(function ($redisCluster) {
     $redisCluster->close();
 }, $redisCluster);
@@ -23,35 +40,38 @@ $typeList = ['NOT_FOUND', 'STRING', 'SET', 'LIST', 'ZSET', 'HASH'];
 if (isset($_GET['o'])) {
     switch ($_GET['o']) {
         case 'load':
-            $prefix = isset($_POST['prefix']) ? $_POST['prefix'] : '';
-            $pattern = $prefix ? "{$prefix}{$DS}*" : "*";
+            $prefix = isset($_GET['prefix']) ? $_GET['prefix'] : '';
+            $pattern = $prefix === '' ? "*" : "{$prefix}*";
             $keyList = $redisCluster->keys($pattern);
             natsort($keyList);
             $data = [];
-            $lastVal = '';
-            foreach ($keyList as $k => $v) {
-                $key = $v;
-                if ($prefix) {
-                    $v = substr($v, strlen($prefix . $DS));
+            $tmp = [];
+            foreach ($keyList as $v) {
+                $code = '$tmp';
+                foreach (explode($DS, $v) as $kk => $vv) {
+                    $code .= "['{$vv}']";
                 }
-                $splitData = explode($DS, $v);
-                $splitCount = count($splitData);
-                $name = $splitData[0];
-                if ($splitCount > 1) {
-                    if ($name == $lastVal) continue;
-                    $isParent = true;
-                    $lastVal = $name;
-                } else {
-                    $isParent = false;
-                }
+                $code .= '=false;';
+                eval($code);
+            }
+            $code = '$tmp';
+            foreach (explode($DS, $prefix) as $kk => $vv) {
+                $code .= "['{$vv}']";
+            }
+            $childList = eval("return isset($code) ? $code : [];");
+            $tmp = $childList ? $childList : $tmp;
+            foreach ($tmp as $k => $v) {
+                $isParent = (bool)$v;
                 $data[] = [
-                    'name' => $name,
+                    'name' => $k,
                     'isParent' => $isParent,
-                    'prefix' => $isParent ? ($prefix ? "{$prefix}{$DS}{$name}" : $name) : '',
-                    'key' => $isParent ? '' : $key,
+                    'prefix' => $isParent ? ($prefix === '' ? $k : $prefix . $DS . $k) : '',
+                    'key' => $isParent ? '' : ($prefix === '' ? $k : $prefix . $DS . $k),
                 ];
             }
+
             echo json_encode($data);
+            unset($tmp, $childList);
             break;
         case 'get':
             $key = isset($_GET['key']) ? $_GET['key'] : '';
@@ -140,24 +160,25 @@ foreach ($redisCluster->_masters() as $v) {
 ksort($masterList);
 foreach ($masterList as $v) {
     $sysInfo .= '<td valign="top"><table cellspacing="0" cellpadding="0" border="0">';
-
     $sysInfo .= "<tr><td>HOST</td><td>{$v[0]}:{$v[1]}</td></tr>";
 
-    $dbSize = $redisCluster->dbSize($v);
+    try {
+        $dbSize = $redisCluster->dbSize($v);
+    } catch (\Exception $e) {
+        $dbSize = "";
+    }
     $sysInfo .= "<tr><td>DBSIZE</td><td>{$dbSize}</td></tr>";
 
-    $time = implode('.', $redisCluster->time($v));
-    $sysInfo .= "<tr><td>TIME</td><td>{$time}</td></tr>";
-
-    $info = $redisCluster->info($v);
+    try {
+        $info = $redisCluster->info($v);
+    } catch (\Exception $e) {
+        $info = [];
+    }
     $optList = [
-        'redis_version', 'redis_mode', 'process_id', 'run_id', 'uptime_in_days',
+        'redis_version', 'uptime_in_days',
         'connected_clients', 'blocked_clients',
         'used_memory_human', 'used_memory_rss_human', 'used_memory_peak_human', 'total_system_memory_human', 'maxmemory_human', 'maxmemory_policy',
-        'total_connections_received', 'rejected_connections', 'expired_keys', 'evicted_keys', 'keyspace_hits', 'keyspace_misses',
-        'role', 'connected_slaves',
         'used_cpu_sys', 'used_cpu_user',
-        'cluster_enabled',
     ];
     $sysInfo .= "<tr><td colspan='2'>&nbsp;</td></tr>";
     $sysInfo .= "<tr><td colspan='2'>INFO</td></tr>";
@@ -167,7 +188,11 @@ foreach ($masterList as $v) {
         }
     }
 
-    $client = $redisCluster->client($v, 'LIST');
+    try {
+        $client = $redisCluster->client($v, 'LIST');
+    } catch (\Exception $e) {
+        $client = [];
+    }
     $sysInfo .= "<tr><td colspan='2'>&nbsp;</td></tr>";
     $sysInfo .= "<tr><td colspan='2'>CLIENT</td></tr>";
     foreach ($client as $vv) {
@@ -189,35 +214,60 @@ $HTML .= '<!DOCTYPE html>
 <title>Redis Cluster Admin</title>
 <meta http-equiv="content-type" content="text/html; charset=UTF-8">
 <link rel="stylesheet" href="http://cdn.staticfile.org/ztree/3.5.16/css/zTreeStyle/zTreeStyle.css" type="text/css">
+<link href="http://cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
 <script type="text/javascript" src="http://cdn.staticfile.org/jquery/2.2.1/jquery.min.js"></script>
 <script type="text/javascript" src="http://cdn.staticfile.org/jquery-cookie/1.4.1/jquery.cookie.min.js"></script>
 <script type="text/javascript" src="http://cdn.staticfile.org/ztree/3.5.16/js/jquery.ztree.all-3.5.min.js"></script>
 </head>
 <body>
 <table width="100%" height="100%" cellspacing="0" cellpadding="0" border="0">
-<tr>
-<td width="200" valign="top">
-<select id="module">' . $optStr . '</select>
-<ul id="tree" class="ztree"></ul>
-</td>
-<td id="content" valign="top">' . $sysInfo . '</td>
-</tr>
+    <tr>
+        <td width="200" valign="top">
+            <table cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                    <td valign="top" colspan="2"><select id="module">' . $optStr . '</select></td>
+                </tr>
+                <tr>
+                    <td id="nav" valign="top"></td>
+                    <td valign="top"><ul id="tree" class="ztree"></ul></td>
+                </tr>
+            </table>
+        </td>
+        <td id="content" valign="top">' . $sysInfo . '</td>
+    </tr>
 </table>
 <script>
     var zTreeObj;
     var setting = {
         async: {
             enable: true,
+            type: "get",
             url:"?o=load",
             autoParam:["name","prefix"]
         },
         callback: {
+            beforeExpand: function(treeId, treeNode) {
+                if(treeNode.level==0) {
+                    if(treeNode.isParent) {
+                        treeNode.prefix = treeNode.name;
+                    } else {
+                        treeNode.key = treeNode.name;
+                    }
+                }
+            },
             beforeRemove: function(treeId, treeNode) {
                 if(treeNode.isParent && !confirm("Delete？")) {
                     return false;
                 }
             },
             onClick: function(event, treeId, treeNode) {
+                if(treeNode.level==0) {
+                    if(treeNode.isParent) {
+                        treeNode.prefix = treeNode.name;
+                    } else {
+                        treeNode.key = treeNode.name;
+                    }
+                }
                 if(treeNode.isParent) {
                     var url = "?o=count&prefix=" + treeNode.prefix;
                 } else {
@@ -226,6 +276,13 @@ $HTML .= '<!DOCTYPE html>
                 jQuery("#content").load(url);
             },
             onRemove: function(event, treeId, treeNode) {
+                if(treeNode.level==0) {
+                    if(treeNode.isParent) {
+                        treeNode.prefix = treeNode.name;
+                    } else {
+                        treeNode.key = treeNode.name;
+                    }
+                }
                 if(treeNode.isParent) {
                     var url = "?o=del&prefix=" + treeNode.prefix;
                 } else {
@@ -246,9 +303,42 @@ $HTML .= '<!DOCTYPE html>
         zTreeObj = $.fn.zTree.init($("#tree"), setting);
         $("#module").change(function(e) {
             $.cookie("module", $(this).val());
-			$(this).delay(200).queue(function(){
-				location.reload();
-			});
+            $(this).delay(200).queue(function(){
+                location.reload();
+            });
+        });
+        var i = 97;
+        var html = "<i class=\"fa fa-font\" style=\"cursor: pointer;\" id=\"conv\" val=\"0\"></i><br>";
+        while (i <= 122) {
+            html += "<label style=\"cursor: pointer;\" class=\"navChr\">" + String.fromCharCode(i) + "</label><br>";
+            i++;
+        }
+        i = 48;
+        while (i <= 57) {
+            html += "<label style=\"cursor: pointer;\" class=\"navNum\">" + String.fromCharCode(i) + "</label><br>";
+            i++;
+        }
+        $("#nav").append(html);
+        $(".navChr,.navNum").click(function(e) {
+            zTreeObj.destroy();
+            setting.async.url = "?o=load&prefix=" + $(this).text();
+            zTreeObj = $.fn.zTree.init($("#tree"), setting);
+        });
+        $("#conv").click(function(e) {
+            var $this = $(this);
+            var isUpper = $this.attr("val") | 0;
+            var i = 0;
+            $(".navChr").each(function(k, v) {
+                if(isUpper) {
+                    i = $(v).text().charCodeAt() | 0;
+                    $(v).text(String.fromCharCode(i + 32));
+                    $this.attr("val", 0);
+                } else {
+                    i = $(v).text().charCodeAt() | 0;
+                    $(v).text(String.fromCharCode(i - 32));
+                    $this.attr("val", 1);
+                }
+            });
         });
     });
 </script>
