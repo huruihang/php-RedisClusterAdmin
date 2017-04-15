@@ -1,5 +1,7 @@
 <?php
 
+class_exists(\RedisCluster::class, false) OR die("Please install the PHP extension: https://github.com/phpredis/phpredis");
+
 error_reporting(E_ALL ^ E_NOTICE);
 ini_set('memory_limit', '1G');
 
