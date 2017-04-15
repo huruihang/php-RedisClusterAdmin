@@ -1,5 +1,6 @@
 <?php
 
+error_reporting(E_ALL ^ E_NOTICE);
 ini_set('memory_limit', '1G');
 
 $config = [
@@ -30,12 +31,20 @@ $DS = '_';
 $HTML = '';
 
 $redisCluster = new \RedisCluster(null, $config[$module], 1, 1, false);
-$redisCluster->setOption(\RedisCluster::OPT_SERIALIZER, \RedisCluster::SERIALIZER_PHP);
+$redisCluster->setOption(\RedisCluster::OPT_SERIALIZER, \RedisCluster::SERIALIZER_NONE);
+$redisCluster->setOption(\RedisCluster::OPT_SCAN, \RedisCluster::SCAN_RETRY);
 $redisCluster->setOption(\RedisCluster::OPT_SLAVE_FAILOVER, \RedisCluster::FAILOVER_ERROR);
 register_shutdown_function(function ($redisCluster) {
     $redisCluster->close();
 }, $redisCluster);
-$typeList = ['NOT_FOUND', 'STRING', 'SET', 'LIST', 'ZSET', 'HASH'];
+$typeList = [
+    \RedisCluster::REDIS_STRING => 'String',
+    \RedisCluster::REDIS_SET => 'Set',
+    \RedisCluster::REDIS_LIST => 'List',
+    \RedisCluster::REDIS_ZSET => 'Sorted set',
+    \RedisCluster::REDIS_HASH => 'Hash',
+    \RedisCluster::REDIS_NOT_FOUND => 'Not found'
+];
 
 if (isset($_GET['o'])) {
     switch ($_GET['o']) {
@@ -77,37 +86,63 @@ if (isset($_GET['o'])) {
             $key = isset($_GET['key']) ? $_GET['key'] : '';
             $type = $redisCluster->type($key);
             $ttl = $redisCluster->ttl($key);
-            $ttl = $ttl < 0 ? ($ttl == -1 ? 'forever' : 'not found') : "{$ttl} s";
+            if ($type == \RedisCluster::REDIS_NOT_FOUND) {
+                $ttl = $typeList[$type];
+            } else {
+                $ttl = $ttl == -1 ? 'forever' : "{$ttl} s";
+            }
             $size = 0;
+            $count = 0;
+            $data = '';
+            $i = NULL;
             switch ($type) {
-                case 0:
+                case \RedisCluster::REDIS_STRING:
+                    $data = $redisCluster->get($key);
+                    $size = strlen($data);
+                    $count++;
+                    if (!$size) break;
+                    $tmp = unserialize($data);
+                    if ($tmp === false) {
+                        $tmp = json_decode($data, 1);
+                    }
+                    $data = $tmp;
+                    if (is_array($data)) {
+                        $data = print_r($data, 1);
+                    }
+                    $data = htmlspecialchars($data);
+                    $data = wordwrap($data, 300, "\n", true);
+                    break;
+                case \RedisCluster::REDIS_SET:
+                    foreach ($redisCluster->sScan($key, $i) as $k => $v) {
+                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $count++;
+                    }
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
+                    break;
+                case \RedisCluster::REDIS_LIST:
+                    foreach ($redisCluster->lRange($key, 0, -1) as $k => $v) {
+                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $count++;
+                    }
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
+                    break;
+                case \RedisCluster::REDIS_ZSET:
+                    foreach ($redisCluster->zScan($key, $i) as $k => $v) {
+                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $count++;
+                    }
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Value</th><th>Score</th></tr>{$data}</table>" : '';
+                    break;
+                case \RedisCluster::REDIS_HASH:
+                    foreach ($redisCluster->hScan($key, $i) as $k => $v) {
+                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $count++;
+                    }
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Key</th><th>Value</th></tr>{$data}</table>" : '';
+                    break;
+                case \RedisCluster::REDIS_NOT_FOUND:
                     $data = '((NOT FOUND))';
                     break;
-                case 1:
-                    $data = $redisCluster->get($key);
-                    break;
-                case 2:
-                    $data = $redisCluster->hGetAll($key);
-                    break;
-                case 3:
-                    $data = $redisCluster->lRange($key, 0, -1);
-                    break;
-                case 4:
-                    $data = $redisCluster->sMembers($key);
-                    break;
-                case 5:
-                    $data = $redisCluster->zRange($key, 0, -1, 1);
-                    break;
-            }
-
-            if ($type) {
-                $size = strlen(serialize($data)) . ' b';
-            }
-            if (is_array($data) || is_object($data)) {
-                $data = print_r($data, 1);
-            } else {
-                $data = htmlspecialchars($data);
-                $data = wordwrap($data, 300, "\n", true);
             }
 
             $HTML .= '<table width="100%" cellspacing="0" cellpadding="0" border="0">';
@@ -115,6 +150,7 @@ if (isset($_GET['o'])) {
             $HTML .= "<tr><td>TYPE</td><td>{$typeList[$type]}</td></tr>";
             $HTML .= "<tr><td>TTL</td><td>{$ttl}</td></tr>";
             $HTML .= "<tr><td>SIZE</td><td>{$size}</td></tr>";
+            $HTML .= "<tr><td>COUNT</td><td>{$count}</td></tr>";
             $HTML .= "<tr><td colspan='2'><pre>{$data}</pre></td></tr>";
             $HTML .= '</table>';
             echo $HTML;
