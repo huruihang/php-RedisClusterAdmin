@@ -6,11 +6,11 @@ error_reporting(E_ALL ^ E_NOTICE);
 ini_set('memory_limit', '1G');
 
 $config = [
-#    'Aniu' => [
-#        '172.17.10.79:7001',
-#        '172.17.10.79:7002',
-#        '172.17.10.79:7003',
-#    ],
+    'Aniu' => [
+        '172.17.10.79:7001',
+        '172.17.10.79:7002',
+        '172.17.10.79:7003',
+    ],
     '网站开发' => [
         '10.16.6.89:8001',
         '10.16.6.89:8002',
@@ -80,7 +80,6 @@ if (isset($_GET['o'])) {
                     'key' => $isParent ? '' : ($prefix === '' ? $k : $prefix . $DS . $k),
                 ];
             }
-
             echo json_encode($data);
             unset($tmp, $childList);
             break;
@@ -176,7 +175,6 @@ if (isset($_GET['o'])) {
                 $redisCluster->del($key);
                 break;
             }
-
             $prefix = isset($_GET['prefix']) ? $_GET['prefix'] : '';
             if ($prefix) {
                 $pattern = $prefix ? "{$prefix}{$DS}*" : "*";
@@ -184,7 +182,14 @@ if (isset($_GET['o'])) {
                 $redisCluster->del($keyList);
                 break;
             }
-
+            break;
+        case 'flush':
+            $master = isset($_GET['master']) ? $_GET['master'] : '';
+            if (!$master) break;
+            foreach ($redisCluster->_masters() as $v) {
+                if ("{$v[0]}:{$v[1]}" != $master) continue;
+                $redisCluster->flushAll($v);
+            }
             break;
     }
     exit;
@@ -205,7 +210,9 @@ foreach ($masterList as $v) {
     } catch (\Exception $e) {
         $dbSize = "";
     }
-    $sysInfo .= "<tr><td>DBSIZE</td><td>{$dbSize}</td></tr>";
+    $sysInfo .= "<tr><td>DBSIZE</td><td>{$dbSize}&nbsp;&nbsp;<label style=\"cursor: pointer; color: ";
+    $sysInfo .= $dbSize ? "red" : "gray";
+    $sysInfo .= ";\" class=\"flushAll\" val=\"{$v[0]}:{$v[1]}\">FlushAll</label></td></tr>";
 
     try {
         $info = $redisCluster->info($v);
@@ -263,7 +270,7 @@ $HTML .= '<!DOCTYPE html>
         <td width="200" valign="top">
             <table cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                    <td valign="top" colspan="2"><select id="module">' . $optStr . '</select></td>
+                    <td valign="top" colspan="2"><a href="/"><i class="fa fa-home"></i></a><select id="module" style="margin-left: 10px;">' . $optStr . '</select></td>
                 </tr>
                 <tr>
                     <td id="nav" valign="top"></td>
@@ -376,6 +383,14 @@ $HTML .= '<!DOCTYPE html>
                     $(v).text(String.fromCharCode(i - 32));
                     $this.attr("val", 1);
                 }
+            });
+        });
+        $(".flushAll").click(function(e) {
+            if(!confirm("Flush？")) return false;
+            var $this = $(this);
+            var url = "?o=flush&master=" + $this.attr("val");
+            $.get(url).done(function(a, b, c) {
+                location.reload();
             });
         });
     });
