@@ -129,28 +129,32 @@ if (isset($_GET['o'])) {
                     foreach ($redisCluster->sScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
                     }
-                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Index</th><th>Member</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_LIST:
                     $count = $redisCluster->lLen($key);
                     foreach ($redisCluster->lRange($key, 0, -1) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
                     }
-                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Index</th><th>Member</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_ZSET:
                     $count = $redisCluster->zCard($key);
+                    $j = 0;
                     foreach ($redisCluster->zScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
-                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $data .= "<tr><td>{$j}</td><td>{$k}</td><td>{$v}</td></tr>";
+                        $j++;
                     }
-                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Value</th><th>Score</th></tr>{$data}</table>" : '';
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Index</th><th>Member</th><th>Score</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_HASH:
                     $count = $redisCluster->hLen($key);
+                    $j = 0;
                     foreach ($redisCluster->hScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
-                        $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
+                        $data .= "<tr><td>{$j}</td><td>{$k}</td><td>{$v}</td></tr>";
+                        $j++;
                     }
-                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Key</th><th>Value</th></tr>{$data}</table>" : '';
+                    $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Index</th><th>Member</th><th>Value</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_NOT_FOUND:
                     $data = '((NOT FOUND))';
