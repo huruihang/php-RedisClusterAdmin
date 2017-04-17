@@ -1,7 +1,6 @@
 <?php
 
 class_exists(\RedisCluster::class, false) OR die("Please install the PHP extension: https://github.com/phpredis/phpredis");
-
 error_reporting(E_ALL ^ E_NOTICE);
 ini_set('memory_limit', '1G');
 
@@ -31,6 +30,7 @@ $module = isset($_COOKIE['module']) ? $_COOKIE['module'] : array_keys($config)[0
 
 $DS = '_';
 $HTML = '';
+$SCAN_COUNT = 3000;
 
 $redisCluster = new \RedisCluster(null, $config[$module], 1, 1, false);
 $redisCluster->setOption(\RedisCluster::OPT_SERIALIZER, \RedisCluster::SERIALIZER_NONE);
@@ -52,8 +52,21 @@ if (isset($_GET['o'])) {
     switch ($_GET['o']) {
         case 'load':
             $prefix = isset($_GET['prefix']) ? $_GET['prefix'] : '';
-            $pattern = $prefix === '' ? "*" : "{$prefix}*";
-            $keyList = $redisCluster->keys($pattern);
+            $search = isset($_GET['search']) ? $_GET['search'] : '';
+            $isSearch = isset($_GET['search']);
+            if ($isSearch) {
+                $pattern = "*{$search}*";
+            } else {
+                $pattern = $prefix === '' ? null : "{$prefix}*";
+            }
+            $keyList = [];
+            foreach ($redisCluster->_masters() as $v) {
+                $i = NULL;
+                $tmp = $redisCluster->scan($i, $v, $pattern, $SCAN_COUNT);
+                if ($tmp === false) continue;
+                $keyList = array_merge($keyList, $tmp);
+                unset($tmp);
+            }
             natsort($keyList);
             $data = [];
             $tmp = [];
@@ -92,16 +105,14 @@ if (isset($_GET['o'])) {
             } else {
                 $ttl = $ttl == -1 ? 'forever' : "{$ttl} s";
             }
-            $size = 0;
             $count = 0;
             $data = '';
             $i = NULL;
             switch ($type) {
                 case \RedisCluster::REDIS_STRING:
                     $data = $redisCluster->get($key);
-                    $size = strlen($data);
                     $count++;
-                    if (!$size) break;
+                    if (!strlen($data)) break;
                     $tmp = unserialize($data);
                     if ($tmp === false) {
                         $tmp = json_decode($data, 1);
@@ -114,30 +125,30 @@ if (isset($_GET['o'])) {
                     $data = wordwrap($data, 300, "\n", true);
                     break;
                 case \RedisCluster::REDIS_SET:
-                    foreach ($redisCluster->sScan($key, $i) as $k => $v) {
+                    $count = $redisCluster->sCard($key);
+                    foreach ($redisCluster->sScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
-                        $count++;
                     }
                     $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_LIST:
+                    $count = $redisCluster->lLen($key);
                     foreach ($redisCluster->lRange($key, 0, -1) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
-                        $count++;
                     }
                     $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Order</th><th>Value</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_ZSET:
-                    foreach ($redisCluster->zScan($key, $i) as $k => $v) {
+                    $count = $redisCluster->zCard($key);
+                    foreach ($redisCluster->zScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
-                        $count++;
                     }
                     $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Value</th><th>Score</th></tr>{$data}</table>" : '';
                     break;
                 case \RedisCluster::REDIS_HASH:
-                    foreach ($redisCluster->hScan($key, $i) as $k => $v) {
+                    $count = $redisCluster->hLen($key);
+                    foreach ($redisCluster->hScan($key, $i, null, $SCAN_COUNT) as $k => $v) {
                         $data .= "<tr><td>{$k}</td><td>{$v}</td></tr>";
-                        $count++;
                     }
                     $data = $data ? "<table cellspacing=\"0\" border=\"1\"><tr><th>Key</th><th>Value</th></tr>{$data}</table>" : '';
                     break;
@@ -150,7 +161,6 @@ if (isset($_GET['o'])) {
             $HTML .= "<tr><td>KEY</td><td>{$key}</td></tr>";
             $HTML .= "<tr><td>TYPE</td><td>{$typeList[$type]}</td></tr>";
             $HTML .= "<tr><td>TTL</td><td>{$ttl}</td></tr>";
-            $HTML .= "<tr><td>SIZE</td><td>{$size}</td></tr>";
             $HTML .= "<tr><td>COUNT</td><td>{$count}</td></tr>";
             $HTML .= "<tr><td colspan='2'><pre>{$data}</pre></td></tr>";
             $HTML .= '</table>';
@@ -270,11 +280,17 @@ $HTML .= '<!DOCTYPE html>
         <td width="200" valign="top">
             <table cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                    <td valign="top" colspan="2"><a href="/"><i class="fa fa-home"></i></a><select id="module" style="margin-left: 10px;">' . $optStr . '</select></td>
+                    <td valign="top" colspan="2">
+                        <a href="/"><i class="fa fa-home"></i></a>
+                        <select id="module" style="margin-left: 5px;">' . $optStr . '</select>
+                    </td>
                 </tr>
                 <tr>
                     <td id="nav" valign="top"></td>
-                    <td valign="top"><ul id="tree" class="ztree"></ul></td>
+                    <td valign="top">
+                    <input type="text" id="search" placeholder="Please enter key" style="margin-left: 10px;">
+                        <ul id="tree" class="ztree"></ul>
+                    </td>
                 </tr>
             </table>
         </td>
@@ -392,6 +408,11 @@ $HTML .= '<!DOCTYPE html>
             $.get(url).done(function(a, b, c) {
                 location.reload();
             });
+        });
+        $("#search").change(function(e) {
+            zTreeObj.destroy();
+            setting.async.url = "?o=load&search=" + $.trim($(this).val());
+            zTreeObj = $.fn.zTree.init($("#tree"), setting);
         });
     });
 </script>
